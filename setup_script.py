@@ -5,15 +5,17 @@ import os
 import re
 import subprocess as sp
 import sys
+import glob
 
 USAGE = """Usage:
   python setup_script.py            Clean and install editable package locally
   python setup_script.py -p         Bump patch version, commit/push, build and upload
+	python setup_script.py -p --testpypi  Publish to TestPyPI instead of PyPI
   python setup_script.py -h|--help  Show this help message
 """
 
 def main():
-	push = parse_args(sys.argv[1:])
+	push, testpypi = parse_args(sys.argv[1:])
 	clean_build_artifacts()
 
 	if push:
@@ -22,7 +24,7 @@ def main():
 
 	if push:
 		run([sys.executable, 'setup.py', 'bdist_wheel', 'sdist', 'build'])
-		run(['twine', 'upload', 'dist/*'], shell=True)
+		upload_dist(testpypi=testpypi)
 	else:
 		run([sys.executable, '-m', 'pip', 'install', '-e', '.'])
 
@@ -32,14 +34,21 @@ def parse_args(args):
 		print(USAGE)
 		sys.exit(0)
 
-	allowed = {'-p'}
+	allowed = {'-p', '--testpypi'}
 	unknown = [arg for arg in args if arg not in allowed]
 	if unknown:
 		print(f"Unknown argument(s): {' '.join(unknown)}\n")
 		print(USAGE)
 		sys.exit(2)
 
-	return '-p' in args
+	push = '-p' in args
+	testpypi = '--testpypi' in args
+	if testpypi and not push:
+		print("--testpypi requires -p\n")
+		print(USAGE)
+		sys.exit(2)
+
+	return push, testpypi
 
 
 def gitpush(version):
@@ -78,6 +87,26 @@ def save(file, string):
 
 def run(command, shell=False):
 	sp.check_call(command, shell=shell)
+
+
+def upload_dist(testpypi=False):
+	artifacts = sorted(glob.glob('dist/*'))
+	if not artifacts:
+		raise RuntimeError('No distribution artifacts found in dist/. Build step may have failed.')
+
+	cmd = [sys.executable, '-m', 'twine', 'upload']
+	if testpypi:
+		cmd.extend(['--repository', 'testpypi'])
+	cmd.extend(artifacts)
+
+	try:
+		run(cmd)
+	except sp.CalledProcessError as e:
+		repo = 'TestPyPI' if testpypi else 'PyPI'
+		raise RuntimeError(
+			f"Upload to {repo} failed. A 403 usually means invalid token/credentials, missing project permissions, or wrong repository target. "
+			"Check that your token is for the correct index and that you are a maintainer/owner of the project."
+		) from e
 	
 	
 	
