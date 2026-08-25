@@ -95,6 +95,8 @@ Slave PIDs: %s"""  %(n,os.getpid(),', '.join(pids))
 				else:
 					ds,s = self.q.get()
 				self.active_processes -= 1
+				if isinstance(ds, BaseException):
+					raise ds
 				d[s] = ds	
 			except Exception as e:
 				print(e)
@@ -106,16 +108,12 @@ Slave PIDs: %s"""  %(n,os.getpid(),', '.join(pids))
 
 class slave():
 	"""Creates a slave"""
-	command = [sys.executable, "-u", "-m", "slave.py"]
+	command = [sys.executable, "-u", "-m", "paneltime_mp.slave"]
 
 
 	def __init__(self):
 		"""Starts local worker"""
-		cwdr=os.getcwd()
-		os.chdir(os.path.dirname(__file__))
-
 		self.p = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-		os.chdir(cwdr)
 		self.t=transact.Transact(self.p.stdout,self.p.stdin, False)
 		self.connected = False
 		
@@ -139,7 +137,10 @@ class slave():
 		if q is None:
 			answ=self.t.receive()
 			return answ
-		q.put((self.t.receive(),self.slave_id))
+		try:
+			q.put((self.t.receive(),self.slave_id))
+		except Exception as e:
+			q.put((e,self.slave_id))
 
 	def connect(self):
 		if self.connected:

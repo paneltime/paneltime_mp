@@ -9,11 +9,14 @@ import traceback
 import datetime
 import time
 import gc
-import transact
-import sys
 import socket
 import threading
 from queue import Queue
+
+try:
+	from . import transact
+except ImportError:
+	import transact
 
 import importlib
 
@@ -22,7 +25,7 @@ import importlib.machinery
 
 
 class SlaveServer:
-	def __init__(self,i):
+	def __init__(self, i, log_file):
 		self.host = '127.0.0.1'
 		self.port = 64512 + i
 		self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -32,7 +35,7 @@ class SlaveServer:
 		self.output_queue = Queue()
 		threading.Thread(target=self.accept, daemon=True).start()
 		self.connection = None
-		self.f = f
+		self.f = log_file
 		
 
 	def accept(self):
@@ -44,13 +47,13 @@ class SlaveServer:
 
 		if self.connection is None:
 			self.connection, self.address = self.output_queue.get()
-		write(f,self.connection)
-		write(f, 'connected from slave')
+		write(self.f, self.connection)
+		write(self.f, 'connected from slave')
 		self.connection.setblocking(0)
 		try:
 			command = self.connection.recv(1024).decode('utf-8')
-			write(f, 'command:')
-			write(f, command)
+			write(self.f, 'command:')
+			write(self.f, command)
 		except (socket.timeout, BlockingIOError) as e:
 			return False
 		return command == "STOP"
@@ -78,10 +81,9 @@ class Session:
 	
 	
 	def dict(self, obj):
-		f_dict = open(obj, 'rb')
-		u = pickle.Unpickler(f_dict)
-		d_new = u.load()
-		f_dict.close()
+		with open(obj, 'rb') as f_dict:
+			u = pickle.Unpickler(f_dict)
+			d_new = u.load()
 		add_to_dict(self.d,d_new)
 		
 	def exec(self, f, obj):
@@ -97,8 +99,9 @@ class Session:
 		t = time.time()
 		sys.stdout = f
 		response = eval(obj,globals(),self.d)
-		response = dict(response)
-		response.pop('slave_server')
+		if isinstance(response, dict):
+			response = dict(response)
+			response.pop('slave_server', None)
 		sys.stdout = sys.__stdout__
 		write(f, f'eval: {obj} \nTime used: {time.time()-t}')
 		return response	
@@ -114,27 +117,29 @@ def write(f,txt):
 	f.flush()
 	
 
-try: 
-	
+try:
+	s_id = 'unknown'
 	t = transact.Transact(sys.stdin, sys.stdout, True)
-	fname=os.path.join(t.fpath,f'thread.txt')
-	f = open(fname, 'w')	
-	
-	#Handshake:
+	fname = os.path.join(t.fpath, 'thread.txt')
+	f = open(fname, 'w')
+
+	# Handshake
 	t.send(os.getpid())
 	msg, s_id = t.receive()
-	server = SlaveServer(s_id)
+	server = SlaveServer(s_id, f)
 	t.send((server.host, server.port))
 	msg, _ = t.receive()
-	fname=os.path.join(t.fpath,f'thread {s_id}.txt')
-	f = open(fname, 'w')	
-	#Wait for instructions:
-
-	Session(t, s_id, f, server)
-except Exception as e:
-	
-	f.write('SID: %s      TIME:%s \n' %(s_id,datetime.datetime.now()))
-	traceback.print_exc(file=f)
-
-	f.flush()
+	fname = os.path.join(t.fpath, f'thread {s_id}.txt')
 	f.close()
+	f = open(fname, 'w')
+
+	# Wait for instructions
+	Session(t, s_id, f, server)
+except Exception:
+	try:
+		f.write('SID: %s      TIME:%s \n' % (s_id, datetime.datetime.now()))
+		traceback.print_exc(file=f)
+		f.flush()
+		f.close()
+	except Exception:
+		traceback.print_exc(file=sys.stderr)
