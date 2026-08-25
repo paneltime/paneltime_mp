@@ -7,7 +7,7 @@ https://packaging.python.org/en/latest/distributing.html
 https://github.com/pypa/sampleproject
 """
 
-version = '0.0.4'
+version = '0.0.5'
 
 from setuptools import setup, find_packages
 from os import path

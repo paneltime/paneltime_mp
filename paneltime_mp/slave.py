@@ -11,7 +11,7 @@ import time
 import gc
 import socket
 import threading
-from queue import Queue
+from queue import Queue, Empty
 
 try:
 	from . import transact
@@ -46,10 +46,13 @@ class SlaveServer:
 	def kill_request(self):
 
 		if self.connection is None:
-			self.connection, self.address = self.output_queue.get()
-		write(self.f, self.connection)
-		write(self.f, 'connected from slave')
-		self.connection.setblocking(0)
+			try:
+				self.connection, self.address = self.output_queue.get_nowait()
+			except Empty:
+				return False	#no master has connected yet, so no kill request can be pending
+			write(self.f, self.connection)
+			write(self.f, 'connected from slave')
+			self.connection.setblocking(0)
 		try:
 			command = self.connection.recv(1024).decode('utf-8')
 			write(self.f, 'command:')
