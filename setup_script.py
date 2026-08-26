@@ -1,142 +1,126 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-import shutil
-import os
-import re
-import subprocess as sp
-import sys
-import glob
 
-USAGE = """Usage:
-  python setup_script.py            Clean and install editable package locally
-  python setup_script.py -p         Bump patch version, commit/push, build and upload
-	python setup_script.py -p --testpypi  Publish to TestPyPI instead of PyPI
-  python setup_script.py -h|--help  Show this help message
-"""
+from pathlib import Path
+import argparse
+import platform
+import re
+import shutil
+import subprocess as sp
+import os
+
+
+CUR_DIR = Path(__file__).resolve().parent
+
+
+def run(cmd, cwd=CUR_DIR):
+    print(f"\nRunning: {' '.join(cmd)}")
+    sp.run(cmd, cwd=cwd, check=True)
+
 
 def main():
-	push, testpypi = parse_args(sys.argv[1:])
-	clean_build_artifacts()
+    parser = argparse.ArgumentParser(description="Build, publish and deploy paneltime_mp.")
+    parser.add_argument("-g", "--git", action="store_true", help="Push paneltime_mp to GitHub")
+    parser.add_argument("-p", "--pypi", action="store_true", help="Upload package to PyPI")
+    parser.add_argument("-k", "--keep-version", action="store_true", help="Do not increment patch version")
 
-	if push:
-		version = add_version()
-		gitpush(version)
+    args = parser.parse_args()
 
-	if push:
-		run([sys.executable, 'setup.py', 'bdist_wheel', 'sdist', 'build'])
-		upload_dist(testpypi=testpypi)
-	else:
-		run([sys.executable, '-m', 'pip', 'install', '-e', '.'])
+    clean()
 
+    version = None
+    if args.git or args.pypi:
+        version = add_version(CUR_DIR, add=not args.keep_version)
+        print(f"Version is now {version}")
 
-def parse_args(args):
-	if '-h' in args or '--help' in args:
-		print(USAGE)
-		sys.exit(0)
+    build_package()
 
-	allowed = {'-p', '--testpypi'}
-	unknown = [arg for arg in args if arg not in allowed]
-	if unknown:
-		print(f"Unknown argument(s): {' '.join(unknown)}\n")
-		print(USAGE)
-		sys.exit(2)
+    if args.git or args.pypi:
+        gitpush(version)
+    else:
+        print('Not pushed to GitHub. Use "-g" to push.')
 
-	push = '-p' in args
-	testpypi = '--testpypi' in args
-	if testpypi and not push:
-		print("--testpypi requires -p\n")
-		print(USAGE)
-		sys.exit(2)
-
-	return push, testpypi
+    if args.pypi:
+        os.system("twine upload dist/*")
+    else:
+        print('Not uploaded to PyPI. Use "-p" to upload.')
 
 
-def gitpush(version):
-	print(f"Packaging paneltime_mp version {version}")
-	r = sp.check_output(['git', 'pull'])
-	if r != b'Already up to date.\n':
-		raise RuntimeError(f'Not up to date after git pull. Fix any conflicts and check that the repository is up to date\nPull output:\n{r})')
-	run(['git', 'add', '.'])
-	run(['git', 'commit', '-m', f'New version {version} committed: {input("Write reason for commit: ")}'])
-	run(['git', 'push'])
-	
-def add_version():
-	with open('setup.py', 'r', encoding='utf-8') as f:
-		s = f.read()
-	m = re.search(r"^version\s*=\s*'([^']+)'", s, flags=re.MULTILINE)
-	if m is None:
-		raise RuntimeError("Could not find version assignment in setup.py")
+def clean():
+    for folder in ["dist", "build", "paneltime_mp.egg-info"]:
+        shutil.rmtree(CUR_DIR / folder, ignore_errors=True)
 
-	v = m.group(1).split('.')
-	if len(v) < 3 or not v[-1].isdigit():
-		raise RuntimeError(f"Version '{m.group(1)}' is not in expected x.y.z format")
-
-	v[-1] = str(int(v[-1]) + 1)
-	version = '.'.join(v)
-	s = s[:m.start(1)] + version + s[m.end(1):]
-	save('setup~.py', s)
-	save('setup.py', s)
-	os.remove('setup~.py')
-	save('paneltime_mp/info.py', f"version='{version}'")
-	return version
-	
-def save(file, string):
-	with open(file, 'w', encoding='utf-8') as f:
-		f.write(string)
+    remove_pycache_dirs(CUR_DIR)
 
 
-def run(command, shell=False):
-	sp.check_call(command, shell=shell)
+def build_package():
+    python_cmd = "python3" if platform.system() == "Darwin" else "python"
+    run([python_cmd, "-m", "build"])
 
 
-def upload_dist(testpypi=False):
-	artifacts = sorted(glob.glob('dist/*'))
-	if not artifacts:
-		raise RuntimeError('No distribution artifacts found in dist/. Build step may have failed.')
+def push_repo(path: Path, message: str):
+    print(f"\nPushing repository: {path}")
 
-	cmd = [sys.executable, '-m', 'twine', 'upload']
-	if testpypi:
-		cmd.extend(['--repository', 'testpypi'])
-	cmd.extend(artifacts)
+    run(["git", "pull"], cwd=path)
+    run(["git", "add", "."], cwd=path)
 
-	try:
-		run(cmd)
-	except sp.CalledProcessError as e:
-		repo = 'TestPyPI' if testpypi else 'PyPI'
-		raise RuntimeError(
-			f"Upload to {repo} failed. A 403 usually means invalid token/credentials, missing project permissions, or wrong repository target. "
-			"Check that your token is for the correct index and that you are a maintainer/owner of the project."
-		) from e
-	
-	
-	
-	
-def rm(fldr):
-	try:
-		shutil.rmtree(fldr)
-	except Exception as e:
-		print(e)
+    result = sp.run(
+        ["git", "status", "--porcelain"],
+        cwd=path,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    if not result.stdout.strip():
+        print(f"No changes to commit in {path}")
+    else:
+        run(["git", "commit", "-m", message], cwd=path)
+
+    run(["git", "push"], cwd=path)
 
 
-def clean_build_artifacts():
-	for folder in ('dist', 'build', 'paneltime_mp.egg-info'):
-		if os.path.isdir(folder):
-			nukedir(folder)
+def gitpush(version: str):
+    reason = input("Write reason for commit: ").strip()
+    message = f"Version {version} committed"
+    if reason:
+        message += f": {reason}"
 
-def nukedir(dir):
-	if dir[-1] == os.sep: dir = dir[:-1]
-	if os.path.isfile(dir):
-		return
-	files = os.listdir(dir)
-	for file in files:
-		if file == '.' or file == '..': continue
-		path = dir + os.sep + file
-		if os.path.isdir(path):
-			nukedir(path)
-		else:
-			os.unlink(path)
-	os.rmdir(dir)
+    push_repo(CUR_DIR, message)
 
 
-if __name__ == '__main__':
-	main()
+def add_version(wd: Path, add=True):
+    srchtrm = r"(\d+\.\d+\.\d+)"
+
+    version = re_replace(wd / "pyproject.toml", srchtrm, add=add)
+    re_replace(wd / "paneltime_mp/info.py", srchtrm, version=version)
+
+    return version
+
+
+def re_replace(path: Path, searchterm: str, version=None, add=True):
+    text = path.read_text(encoding="utf-8")
+    match = re.search(searchterm, text, re.MULTILINE)
+
+    if not match:
+        raise RuntimeError(f"No version number found in {path}")
+
+    if version is None:
+        major, minor, patch = match.group(0).split(".")
+        patch = str(int(patch) + int(add))
+        version = ".".join([major, minor, patch])
+
+    text = text[:match.start()] + version + text[match.end():]
+    path.write_text(text, encoding="utf-8")
+
+    return version
+
+
+def remove_pycache_dirs(root: Path):
+    for path in root.rglob("__pycache__"):
+        print(f"Removing {path}")
+        shutil.rmtree(path, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    main()
