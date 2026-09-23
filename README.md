@@ -1,7 +1,7 @@
 # paneltime_mp
 
 Author: Espen Sirnes
-Version: 0.0.2
+Version: 1.0.1
 
 Multiprocessing interface
 
