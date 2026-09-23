@@ -65,6 +65,7 @@ class Session:
 	def __init__(self, t, s_id, f, server):
 		self.d=dict()
 		self.d['slave_server'] = server
+		self.console_stdout = sys.stdout
 		while 1:
 			(msg,obj) = t.receive()
 			response=None
@@ -92,8 +93,10 @@ class Session:
 	def exec(self, f, obj):
 		sys.stdout = f
 		t = time.time()
-		exec(obj,globals(),self.d)
-		sys.stdout = sys.__stdout__	
+		try:
+			exec(obj,globals(),self.d)
+		finally:
+			sys.stdout = self.console_stdout
 		write(f, f'exec: {obj} \nTime used: {time.time()-t}')
 
 
@@ -101,11 +104,13 @@ class Session:
 	def eval(self, f, obj):
 		t = time.time()
 		sys.stdout = f
-		response = eval(obj,globals(),self.d)
-		if isinstance(response, dict):
-			response = dict(response)
-			response.pop('slave_server', None)
-		sys.stdout = sys.__stdout__
+		try:
+			response = eval(obj,globals(),self.d)
+			if isinstance(response, dict):
+				response = dict(response)
+				response.pop('slave_server', None)
+		finally:
+			sys.stdout = self.console_stdout
 		write(f, f'eval: {obj} \nTime used: {time.time()-t}')
 		return response	
 
@@ -122,7 +127,9 @@ def write(f,txt):
 
 try:
 	s_id = 'unknown'
-	t = transact.Transact(sys.stdin, sys.stdout, True)
+	protocol_stdin = os.fdopen(os.dup(sys.stdin.fileno()), 'rb', buffering=0)
+	protocol_stdout = os.fdopen(os.dup(sys.stdout.fileno()), 'wb', buffering=0)
+	t = transact.Transact(protocol_stdin, protocol_stdout, True)
 	fname = os.path.join(t.fpath, 'thread.txt')
 	f = open(fname, 'w')
 
@@ -135,6 +142,7 @@ try:
 	fname = os.path.join(t.fpath, f'thread {s_id}.txt')
 	f.close()
 	f = open(fname, 'w')
+	server.f = f
 
 	# Wait for instructions
 	Session(t, s_id, f, server)
